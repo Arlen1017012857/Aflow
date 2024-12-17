@@ -2,9 +2,10 @@ from typing import Dict, List, Union, Any
 import importlib
 
 class WorkflowManager:
-    def __init__(self, neo4j_manager, retriever_manager):
+    def __init__(self, neo4j_manager, retriever_manager, task_manager):
         self.neo4j_manager = neo4j_manager
         self.retriever_manager = retriever_manager
+        self.task_manager = task_manager
 
     def create_workflow(self, name: str, description: str, tasks: List[Dict[str, Union[str, int]]]) -> Dict:
         """Create new workflow and add tasks
@@ -188,8 +189,8 @@ class WorkflowManager:
         with self.neo4j_manager.get_session() as session:
             # Get workflow tasks in order
             result = session.run("""
-                MATCH (w:Workflow {name: $workflow_name})-[r:CONTAINS]->(task:Task)-[:USES]->(tool:Tool)
-                RETURN task, tool, r.order as task_order
+                MATCH (w:Workflow {name: $workflow_name})-[r:CONTAINS]->(task:Task)
+                RETURN task, r.order as task_order
                 ORDER BY r.order
                 """,
                 workflow_name=workflow_name
@@ -199,7 +200,6 @@ class WorkflowManager:
             for record in result:
                 tasks.append({
                     "task": record["task"],
-                    "tool": record["tool"],
                     "order": record["task_order"]
                 })
             
@@ -210,16 +210,12 @@ class WorkflowManager:
             results = {}
             for task_info in tasks:
                 task = task_info["task"]
-                tool = task_info["tool"]
                 
                 try:
-                    # Execute tool and update context variables
-                    result = self.execute_tool(task, tool, context_variables)
-                    results[task["name"]] = result
-                    
-                    # Update context variables if result is a dictionary
-                    if isinstance(result, dict):
-                        context_variables.update(result)
+                    # Execute task and update context variables
+                    result = self.task_manager.execute_task(task["name"], context_variables)
+                    results[task["name"]] = result["results"]
+                    context_variables = result["context_variables"]
                         
                 except Exception as e:
                     raise Exception(f"Error executing task '{task['name']}': {str(e)}")
