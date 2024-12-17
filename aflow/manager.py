@@ -1,9 +1,9 @@
 from typing import Dict, List, Union, Any
 from .database import Neo4jManager, IndexManager
 from .retrieval import RetrieverManager
-from .models import ToolManager, TaskManager, WorkflowManager as BaseWorkflowManager
+from .models import ToolManager, TaskManager, WorkflowManager
 
-class WorkflowManager:
+class AflowManager:
     def __init__(self, uri: str = None, user: str = None, password: str = None, database: str = "neo4j"):
         """Initialize workflow manager"""
         # Initialize database connection
@@ -19,7 +19,7 @@ class WorkflowManager:
         # Initialize model managers
         self.tool_manager = ToolManager(self.neo4j_manager, self.retriever_manager)
         self.task_manager = TaskManager(self.neo4j_manager, self.retriever_manager)
-        self.workflow_manager = BaseWorkflowManager(self.neo4j_manager, self.retriever_manager)
+        self.workflow_manager = WorkflowManager(self.neo4j_manager, self.retriever_manager)
 
     def create_tool(self, name: str, description: str, category: str = 'uncategorized') -> Dict:
         """Create a new tool or return existing one"""
