@@ -1,15 +1,20 @@
 from typing import Dict, List
 from neo4j_graphrag.retrievers import HybridCypherRetriever
 from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
-import os
 
 class RetrieverManager:
-    def __init__(self, neo4j_manager):
+    def __init__(self, neo4j_manager, embedder_config):
+        """Initialize retriever manager with configuration
+        
+        Args:
+            neo4j_manager: Neo4j database manager
+            embedder_config: Embedder configuration dictionary containing api_key, base_url, and model
+        """
         self.neo4j_manager = neo4j_manager
         self.embedder = OpenAIEmbeddings(
-            base_url=os.getenv("EMBEDDER_BASE_URL", "http://localhost:11434/v1"),
-            api_key=os.getenv("EMBEDDER_API_KEY", "ollama"),
-            model=os.getenv("EMBEDDER_MODEL", "nomic-embed-text:v1.5")
+            base_url=embedder_config['base_url'],
+            api_key=embedder_config['api_key'],
+            model=embedder_config['model']
         )
         
         self.workflow_retriever = self._create_workflow_retriever()

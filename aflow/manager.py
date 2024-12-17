@@ -2,19 +2,31 @@ from typing import Dict, List, Union, Any
 from .database import Neo4jManager, IndexManager
 from .retrieval import RetrieverManager
 from .models import ToolManager, TaskManager, WorkflowManager
+from .config import load_config
 
 class AflowManager:
-    def __init__(self, uri: str = None, user: str = None, password: str = None, database: str = "neo4j"):
-        """Initialize workflow manager"""
+    def __init__(self):
+        """Initialize workflow manager using configuration from .env file"""
+        # Load configuration
+        config = load_config()
+        
         # Initialize database connection
-        self.neo4j_manager = Neo4jManager(uri, user, password, database)
+        self.neo4j_manager = Neo4jManager(
+            uri=config['neo4j']['uri'],
+            user=config['neo4j']['user'],
+            password=config['neo4j']['password'],
+            database=config['neo4j']['database']
+        )
         
         # Initialize index manager and create indexes
         self.index_manager = IndexManager(self.neo4j_manager)
         self.index_manager.init_indexes()
         
         # Initialize retriever manager
-        self.retriever_manager = RetrieverManager(self.neo4j_manager)
+        self.retriever_manager = RetrieverManager(
+            neo4j_manager=self.neo4j_manager,
+            embedder_config=config['embedder']
+        )
         
         # Initialize model managers
         self.tool_manager = ToolManager(self.neo4j_manager, self.retriever_manager)
