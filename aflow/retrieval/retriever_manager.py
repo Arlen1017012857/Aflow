@@ -2,6 +2,7 @@ from typing import Dict, List
 from neo4j_graphrag.retrievers import HybridCypherRetriever
 from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
 
+
 class RetrieverManager:
     def __init__(self, neo4j_manager, embedder_config):
         """Initialize retriever manager with configuration
@@ -94,45 +95,74 @@ class RetrieverManager:
 
     def search_workflows(self, query: str, top_k: int = 5):
         """Search workflows using hybrid retrieval"""
-        results = self.workflow_retriever.retrieve(query, top_k)
+        results = self.workflow_retriever.search(query_text=query, top_k=top_k)
         return self.parse_search_results(results, "workflow")
 
     def search_tasks(self, query: str, top_k: int = 5):
         """Search tasks using hybrid retrieval"""
-        results = self.task_retriever.retrieve(query, top_k)
+        results = self.task_retriever.search(query_text=query, top_k=top_k)
         return self.parse_search_results(results, "task")
 
     def search_tools(self, query: str, top_k: int = 5):
         """Search tools using hybrid retrieval"""
-        results = self.tool_retriever.retrieve(query, top_k)
+        results = self.tool_retriever.search(query_text=query, top_k=top_k)
         return self.parse_search_results(results, "tool")
 
     def parse_search_results(self, results, result_type: str = "workflow") -> List[Dict]:
         """Parse search results into dictionary format"""
         parsed_results = []
         
-        for result in results:
+        for item in results.items:
+            content = item.content
+            result_dict = {}
+            
             if result_type == "workflow":
-                parsed_results.append({
-                    "name": result["workflow_name"],
-                    "description": result["workflow_description"],
-                    "similarity_score": result["similarity_score"],
-                    "tasks": result["tasks"]
-                })
-            elif result_type == "task":
-                parsed_results.append({
-                    "name": result["task_name"],
-                    "description": result["task_description"],
-                    "similarity_score": result["similarity_score"],
-                    "tool": result["tool_name"],
-                    "workflows": result["workflows"]
-                })
-            elif result_type == "tool":
-                parsed_results.append({
-                    "name": result["tool_name"],
-                    "description": result["tool_description"],
-                    "similarity_score": result["similarity_score"],
-                    "used_by_tasks": result["used_by_tasks"]
-                })
+                # Parse workflow search results
+                workflow_name = content.split("workflow_name='")[1].split("'")[0]
+                workflow_desc = content.split("workflow_description='")[1].split("'")[0]
+                similarity = float(content.split("similarity_score=")[1].split(" ")[0])
+                tasks_str = content.split("tasks=")[1].strip(">").strip()
+                tasks = eval(tasks_str)
                 
+                result_dict = {
+                    "name": workflow_name,
+                    "description": workflow_desc,
+                    "similarity_score": similarity,
+                    "tasks": tasks
+                }
+                
+            elif result_type == "task":
+                # Parse task search results
+                task_name = content.split("task_name='")[1].split("'")[0]
+                task_desc = content.split("task_description='")[1].split("'")[0]
+                similarity = float(content.split("similarity_score=")[1].split(" ")[0])
+                tool_name = content.split("tool_name='")[1].split("'")[0]
+                workflows_str = content.split("workflows=")[1].strip(">").strip()
+                workflows = eval(workflows_str)
+                
+                result_dict = {
+                    "name": task_name,
+                    "description": task_desc,
+                    "similarity_score": similarity,
+                    "tool": tool_name,
+                    "workflows": workflows
+                }
+                
+            elif result_type == "tool":
+                # Parse tool search results
+                tool_name = content.split("tool_name='")[1].split("'")[0]
+                tool_desc = content.split("tool_description='")[1].split("'")[0]
+                similarity = float(content.split("similarity_score=")[1].split(" ")[0])
+                used_by_tasks_str = content.split("used_by_tasks=")[1].strip(">").strip()
+                used_by_tasks = eval(used_by_tasks_str)
+                
+                result_dict = {
+                    "name": tool_name,
+                    "description": tool_desc,
+                    "similarity_score": similarity,
+                    "used_by_tasks": used_by_tasks
+                }
+            
+            parsed_results.append(result_dict)
+        
         return parsed_results

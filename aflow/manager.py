@@ -29,9 +29,9 @@ class AflowManager:
         )
         
         # Initialize model managers
-        self.tool_manager = ToolManager(self.neo4j_manager, self.retriever_manager)
+        self.tool_manager = ToolManager(self.neo4j_manager, self.retriever_manager, config['tools_dir'])
         self.task_manager = TaskManager(self.neo4j_manager, self.retriever_manager)
-        self.workflow_manager = WorkflowManager(self.neo4j_manager, self.retriever_manager)
+        self.workflow_manager = WorkflowManager(self.neo4j_manager, self.retriever_manager, self.task_manager)
 
     def create_tool(self, name: str, description: str, category: str = 'uncategorized') -> Dict:
         """Create a new tool or return existing one"""
@@ -40,6 +40,19 @@ class AflowManager:
     def update_tool(self, name: str, description: str = None, category: str = None) -> Dict:
         """Update existing tool properties"""
         return self.tool_manager.update_tool(name, description, category)
+    
+    def get_tool(self, tool_name: str) -> Dict:
+        """Get tool details"""
+        return self.tool_manager.get_tool(tool_name)
+
+    def list_tools(self) -> list:
+        """List all tools"""
+        return self.tool_manager.list_tools()
+
+    def scan_tools(self):
+        """Scan tools directory for new tools"""
+        return self.tool_manager.scan_tools()
+
 
     def create_task(self, name: str, description: str, tool_name: str) -> Dict:
         """Create a new task and associate with tool"""

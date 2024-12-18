@@ -18,5 +18,7 @@ def load_config():
             'api_key': os.getenv('EMBEDDER_API_KEY', 'ollama'),
             'base_url': os.getenv('EMBEDDER_BASE_URL', 'https://api.openai.com/v1'),
             'model': os.getenv('EMBEDDER_MODEL', 'text-embedding-ada-002')
-        }
+        },
+        # Tools directory
+        'tools_dir': os.getenv('TOOLS_DIR', 'aflow/tools')
     }
