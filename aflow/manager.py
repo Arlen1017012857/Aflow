@@ -53,6 +53,10 @@ class AflowManager:
         """Scan tools directory for new tools"""
         return self.tool_manager.scan_tools()
 
+    def sync_tools(self):
+        """Sync tools directory and database"""
+        return self.tool_manager.sync_tools()
+
 
     def create_task(self, name: str, description: str, tool_name: str) -> Dict:
         """Create a new task and associate with tool"""

@@ -1,5 +1,5 @@
 from typing import Dict
-from .merkle_tree import MerkleTree
+from .merkle_tree import MerkleTree, MerkleNode
 import os
 import ast
 import time
@@ -410,6 +410,106 @@ class ToolManager:
             )
             
             return [record["tool"] for record in results]
+
+    def sync_tools(self):
+        """同步工具目录和数据库
+        
+        扫描tools_dir下的所有工具，对比数据库中相同category下的工具，
+        以扫描的工具为准，更新、添加或删除数据库中的工具。
+        
+        Returns:
+            Dict: 包含同步结果的字典，格式为：
+                {
+                    'added': [{'name': str, 'category': str}],
+                    'updated': [{'name': str, 'category': str}],
+                    'removed': [{'name': str, 'category': str}]
+                }
+        """
+        print(f"Synchronizing tools from {self.tools_dir}")
+        
+        # 跟踪同步操作
+        sync_result = {
+            'added': [],
+            'updated': [],
+            'removed': []
+        }
+        
+        # 1. 获取文件系统中的所有工具
+        fs_tools = {}  # {category: {name: (description, node)}}
+        
+        def scan_tools_dir(node: MerkleNode):
+            if node.is_function:
+                # 获取category（从文件路径）
+                file_path = node.path.split('::')[0]
+                rel_path = os.path.relpath(file_path, self.tools_dir)
+                category = os.path.splitext(rel_path)[0].replace(os.sep, '.')
+                
+                # 存储工具信息
+                if category not in fs_tools:
+                    fs_tools[category] = {}
+                fs_tools[category][node.function_name] = (node.function_doc or "", node)
+            else:
+                # 递归处理子节点
+                for child in node.children.values():
+                    scan_tools_dir(child)
+        
+        # 构建新的Merkle树并扫描工具
+        self.merkle_tree.root = self.merkle_tree._build_tree(self.tools_dir)
+        scan_tools_dir(self.merkle_tree.root)
+        
+        # 2. 获取数据库中的所有工具
+        with self.neo4j_manager.get_session() as session:
+            result = session.run("""
+                MATCH (tool:Tool)
+                RETURN tool.name as name, tool.description as description, 
+                       tool.category as category
+            """)
+            db_tools = {}  # {category: {name: description}}
+            for record in result:
+                category = record['category']
+                if category not in db_tools:
+                    db_tools[category] = {}
+                db_tools[category][record['name']] = record['description']
+        
+        # 3. 对比并同步
+        # 3.1 处理每个category
+        all_categories = set(fs_tools.keys()) | set(db_tools.keys())
+        for category in all_categories:
+            fs_category_tools = fs_tools.get(category, {})
+            db_category_tools = db_tools.get(category, {})
+            
+            # 3.2 找出需要添加、更新和删除的工具
+            all_tools = set(fs_category_tools.keys()) | set(db_category_tools.keys())
+            for tool_name in all_tools:
+                if tool_name in fs_category_tools:
+                    description, node = fs_category_tools[tool_name]
+                    if tool_name not in db_category_tools:
+                        # 添加新工具
+                        print(f"Adding tool: {tool_name} in {category}")
+                        self.create_tool(tool_name, description, category)
+                        sync_result['added'].append({
+                            'name': tool_name,
+                            'category': category
+                        })
+                    elif db_category_tools[tool_name] != description:
+                        # 更新已有工具
+                        print(f"Updating tool: {tool_name} in {category}")
+                        self.update_tool(tool_name, description, category)
+                        sync_result['updated'].append({
+                            'name': tool_name,
+                            'category': category
+                        })
+                else:
+                    # 删除不存在的工具
+                    print(f"Removing tool: {tool_name} from {category}")
+                    self._remove_tool(tool_name)
+                    sync_result['removed'].append({
+                        'name': tool_name,
+                        'category': category
+                    })
+        
+        print("Tool synchronization completed")
+        return sync_result
 
     def cleanup(self):
         """Clean up resources"""

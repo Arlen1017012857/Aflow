@@ -14,6 +14,8 @@ if __name__ == "__main__":
         shutil.rmtree(merkle_state_dir)
     
     aflow_manager = AflowManager()
+    # sync_tools_result = aflow_manager.sync_tools()
+    # print("Sync tools result:", sync_tools_result)
     
     # Clear database
     # with aflow_manager.neo4j_manager.get_session() as session:
