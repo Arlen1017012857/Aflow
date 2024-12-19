@@ -1,11 +1,3 @@
-"""Weather API tool for testing
-
-用于测试天气查询， This tool demonstrates API integration capabilities by providing weather information.
-
-Category: api_tools
-Tools: weather_api
-"""
-
 from typing import Dict
 import requests
 

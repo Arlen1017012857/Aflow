@@ -194,12 +194,47 @@ class ToolManager:
         changes = self.merkle_tree.update()
         print(f"Found changes: {changes}")
         
+        # 获取发生变化的函数信息
+        changed_functions = getattr(self.merkle_tree, 'changed_functions', {})
+        
         # Process changed files
         for file_path in changes['added'] | changes['modified']:
             print(f"Processing file: {file_path}")
-            self._process_tool_file(file_path)
             
-        # Remove deleted tools
+            # 获取要删除的函数
+            if file_path in changed_functions:
+                # 从previous_root中获取文件的旧状态
+                rel_path = os.path.relpath(file_path, self.tools_dir)
+                old_node = self.merkle_tree.previous_root
+                for part in rel_path.split(os.sep):
+                    old_node = old_node.children.get(part) if old_node else None
+                
+                # 获取旧状态中的函数
+                old_funcs = set()
+                if old_node:
+                    old_funcs = {name for name, node in old_node.children.items() 
+                               if node.is_function}
+                
+                # 获取新状态中的函数
+                new_node = self.merkle_tree.root
+                for part in rel_path.split(os.sep):
+                    new_node = new_node.children.get(part) if new_node else None
+                new_funcs = set()
+                if new_node:
+                    new_funcs = {name for name, node in new_node.children.items() 
+                               if node.is_function}
+                
+                # 找出被删除的函数
+                deleted_funcs = old_funcs - new_funcs
+                if deleted_funcs:
+                    print(f"Functions to delete: {deleted_funcs}")
+                    for func_name in deleted_funcs:
+                        self._remove_tool(func_name)
+            
+            # 处理新增或修改的函数
+            self._process_tool_file(file_path, changed_functions.get(file_path, set()))
+            
+        # Remove deleted files
         for file_path in changes['removed']:
             print(f"Removing file: {file_path}")
             self._remove_tool_file(file_path)
@@ -207,106 +242,96 @@ class ToolManager:
         # Save updated Merkle tree state
         self._save_merkle_state()
 
-    def _process_tool_file(self, file_path: str):
+    def _remove_tool(self, tool_name: str):
+        """Remove a specific tool from database
+        
+        Args:
+            tool_name: Name of the tool to remove
+        """
+        print(f"Removing tool: {tool_name}")
+        with self.neo4j_manager.get_session() as session:
+            session.run("""
+                MATCH (tool:Tool {name: $name})
+                DELETE tool
+                """,
+                name=tool_name
+            )
+
+    def _process_tool_file(self, file_path: str, changed_functions: set = None):
         """Process a tool file and update database
         
         Args:
             file_path: Path to the tool file
+            changed_functions: Set of function names that have changed
         """
-        try:
-            print(f"Reading file: {file_path}")
-            # Read and parse file
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                print(f"File contents:\n{content}")
-                tree = ast.parse(content)
-            
-            # Extract tool information
-            tool_info = self._extract_tool_info(file_path, tree)
-            print(f"Extracted tool info: {self._filter_tool_info(tool_info)}")
-            if not tool_info:
-                return
-                
-            # Create or update tools in database
-            for info in tool_info:
-                if info['exists']:
-                    print(f"Updating tool: {info['name']}")
-                    self.update_tool(
-                        name=info['name'],
-                        description=info['description'],
-                        category=info['category']
-                    )
-                else:
-                    print(f"Creating tool: {info['name']}")
-                    self.create_tool(
-                        name=info['name'],
-                        description=info['description'],
-                        category=info['category']
-                    )
-                
-        except Exception as e:
-            print(f"Error processing tool file {file_path}: {e}")
-
-    def _extract_tool_info(self, file_path: str, tree: ast.AST) -> Dict:
-        """Extract tool information from AST
-        
-        Args:
-            file_path: Path to the tool file
-            tree: AST of the tool file
-            
-        Returns:
-            Dict containing tool information or None if not a valid tool
-        """
-        # Get category from directory name
+        # 获取文件对应的MerkleNode
         rel_path = os.path.relpath(file_path, self.tools_dir)
-        parts = os.path.split(rel_path)
-        category = parts[0] if len(parts) > 1 else 'uncategorized'
+        current_node = self.merkle_tree.root
+        for part in rel_path.split(os.sep):
+            current_node = current_node.children.get(part)
+            if not current_node:
+                print(f"File not found in Merkle tree: {file_path}")
+                return
         
-        # Extract tools from function definitions
-        tools_info = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                # Skip private functions
-                if node.name.startswith('_'):
-                    continue
-                    
-                # Get function docstring
-                func_doc = ast.get_docstring(node)
-                if not func_doc:
-                    continue
-                    
-                # Create tool info
-                tool_name = node.name
-                description = func_doc.strip()
+        # 处理文件中的函数节点
+        for func_name, func_node in current_node.children.items():
+            if not func_node.is_function:
+                continue
                 
-                # Check if tool exists
-                with self.neo4j_manager.get_session() as session:
-                    exists = session.run("""
-                        MATCH (tool:Tool {name: $name})
-                        RETURN count(tool) > 0 as exists
-                        """,
-                        name=tool_name
-                    ).single()["exists"]
+            # 如果提供了changed_functions，则只处理发生变化的函数
+            if changed_functions is not None and func_name not in changed_functions:
+                continue
                 
-                tools_info.append({
-                    'name': tool_name,
-                    'description': description,
-                    'category': category,
-                    'exists': exists
-                })
-        
-        return tools_info if tools_info else None
+            # 从函数节点获取信息
+            tool_name = func_node.function_name
+            description = func_node.function_doc or ""
+            category = os.path.splitext(rel_path)[0].replace(os.sep, '.')
+            
+            # 检查工具是否存在
+            with self.neo4j_manager.get_session() as session:
+                exists = session.run("""
+                    MATCH (tool:Tool {name: $name})
+                    RETURN count(tool) > 0 as exists
+                    """,
+                    name=tool_name
+                ).single()["exists"]
+            
+            # 创建或更新工具
+            if exists:
+                print(f"Updating tool: {tool_name}")
+                self.update_tool(
+                    name=tool_name,
+                    description=description,
+                    category=category
+                )
+            else:
+                print(f"Creating tool: {tool_name}")
+                self.create_tool(
+                    name=tool_name,
+                    description=description,
+                    category=category
+                )
 
     def _remove_tool_file(self, file_path: str):
-        """Remove a tool from database when its file is deleted
+        """Remove tools from database when their file is deleted
         
         Args:
             file_path: Path to the deleted tool file
         """
+        # 从previous_root中查找被删除的文件节点
         rel_path = os.path.relpath(file_path, self.tools_dir)
-        parts = rel_path.split(os.sep)
-        if len(parts) >= 2:
-            tool_name = os.path.splitext(parts[1])[0]
+        current_node = self.merkle_tree.previous_root
+        for part in rel_path.split(os.sep):
+            current_node = current_node.children.get(part) if current_node else None
+            if not current_node:
+                return
+        
+        # 删除文件中的所有函数对应的工具
+        for func_name, func_node in current_node.children.items():
+            if not func_node.is_function:
+                continue
+                
+            tool_name = func_node.function_name
             with self.neo4j_manager.get_session() as session:
                 session.run("""
                     MATCH (tool:Tool {name: $name})
@@ -314,6 +339,7 @@ class ToolManager:
                     """,
                     name=tool_name
                 )
+                print(f"Removed tool: {tool_name}")
 
     def _save_merkle_state(self):
         # Save updated Merkle tree state in database
