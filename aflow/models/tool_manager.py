@@ -257,59 +257,45 @@ class ToolManager:
         Returns:
             Dict containing tool information or None if not a valid tool
         """
-        # Get module docstring for tool info
-        module_doc = ast.get_docstring(tree)
-        if not module_doc:
-            # Try to get docstring from first class or function
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
-                    module_doc = ast.get_docstring(node)
-                    if module_doc:
-                        break
-            if not module_doc:
-                return None
-
-        # Extract category and tools from docstring
-        category = 'uncategorized'
-        tools = []
-        docstring_lines = module_doc.split('\n')
-        filtered_lines = []
-        for line in docstring_lines:
-            line = line.strip()
-            lower_line = line.lower()
-            if lower_line.startswith('category:'):
-                category = line.split(':', 1)[1].strip()
-            elif lower_line.startswith('tools:'):
-                tools = [t.strip() for t in line.split(':', 1)[1].strip().split(',')]
-            else:
-                filtered_lines.append(line)
+        # Get category from directory name
+        rel_path = os.path.relpath(file_path, self.tools_dir)
+        parts = os.path.split(rel_path)
+        category = parts[0] if len(parts) > 1 else 'uncategorized'
         
-        if not tools:  # No tools specified
-            return None
-            
-        module_doc = '\n'.join(filtered_lines)
-        description = module_doc.strip()
-        
-        # Create/update each tool
-        results = []
-        for tool_name in tools:
-            # Check if tool exists
-            with self.neo4j_manager.get_session() as session:
-                exists = session.run("""
-                    MATCH (tool:Tool {name: $name})
-                    RETURN count(tool) > 0 as exists
-                    """,
-                    name=tool_name
-                ).single()["exists"]
+        # Extract tools from function definitions
+        tools_info = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                # Skip private functions
+                if node.name.startswith('_'):
+                    continue
+                    
+                # Get function docstring
+                func_doc = ast.get_docstring(node)
+                if not func_doc:
+                    continue
+                    
+                # Create tool info
+                tool_name = node.name
+                description = func_doc.strip()
                 
-            results.append({
-                'name': tool_name,
-                'description': description,
-                'category': category,
-                'exists': exists
-            })
-            
-        return results
+                # Check if tool exists
+                with self.neo4j_manager.get_session() as session:
+                    exists = session.run("""
+                        MATCH (tool:Tool {name: $name})
+                        RETURN count(tool) > 0 as exists
+                        """,
+                        name=tool_name
+                    ).single()["exists"]
+                
+                tools_info.append({
+                    'name': tool_name,
+                    'description': description,
+                    'category': category,
+                    'exists': exists
+                })
+        
+        return tools_info if tools_info else None
 
     def _remove_tool_file(self, file_path: str):
         """Remove a tool from database when its file is deleted
