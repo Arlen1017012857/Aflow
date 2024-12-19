@@ -35,6 +35,6 @@ if __name__ == "__main__":
     # tools = aflow_manager.list_tools()
     # print("\nFound tools:", tools)
 
-    search_query = "测试天气"
+    search_query = "测试用的工具"
     search_results = aflow_manager.search_tools(search_query)
     print("\nSearch results:", search_results)
