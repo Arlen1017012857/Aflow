@@ -1,24 +1,35 @@
 from typing import Dict, List, Any, Union
 import importlib
+import inspect
 
 class TaskManager:
     def __init__(self, neo4j_manager, retriever_manager):
         self.neo4j_manager = neo4j_manager
         self.retriever_manager = retriever_manager
 
-    def create_task(self, name: str, description: str, tool_names: List[str]) -> Dict:
+    def create_task(self, name: str, description: str, tool_names: List[str], 
+                   input_params: List[str] = None, output_params: List[str] = None) -> Dict:
         """Create a new task and associate with tools
         
         Args:
             name: Task name
             description: Task description
             tool_names: List of tool names
+            input_params: List of required input parameter names
+            output_params: List of output parameter names to return
         """
+        if input_params is None:
+            input_params = []
+        if output_params is None:
+            output_params = []
+            
         with self.neo4j_manager.get_session() as session:
             # Check if task exists
             existing_task = session.run("""
                 MATCH (task:Task {name: $name})-[:USES]->(tool:Tool)
-                RETURN task, collect(tool.name) as tools
+                WITH task, tool ORDER BY tool.order
+                WITH task, collect(tool) as tools
+                RETURN task, tools
                 LIMIT 1
                 """,
                 name=name
@@ -53,19 +64,28 @@ class TaskManager:
                 CREATE (task:Task {
                     name: $name,
                     description: $description,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    input_params: $input_params,
+                    output_params: $output_params
                 })
                 WITH task
                 UNWIND $tool_names as tool_name
                 MATCH (tool:Tool {name: tool_name})
                 CREATE (task)-[:USES {order: index(tool_name)}]->(tool)
-                RETURN task, collect(tool.name) as tools
+                
+                WITH task
+                MATCH (task)-[r:USES]->(tool:Tool)
+                WITH task, tool ORDER BY r.order
+                WITH task, collect(tool) as tools
+                RETURN task, tools
                 LIMIT 1
                 """,
                 name=name,
                 description=description,
                 tool_names=tool_names,
-                embedding=embedding
+                embedding=embedding,
+                input_params=input_params,
+                output_params=output_params
             )
             
             record = result.single()
@@ -75,13 +95,16 @@ class TaskManager:
                 return task
             return None
 
-    def update_task(self, name: str, description: str = None, tool_names: List[str] = None) -> Dict:
+    def update_task(self, name: str, description: str = None, tool_names: List[str] = None,
+                   input_params: List[str] = None, output_params: List[str] = None) -> Dict:
         """Update existing task properties and tool associations
         
         Args:
             name: Task name
             description: Task description
             tool_names: List of tool names
+            input_params: List of required input parameter names
+            output_params: List of output parameter names to return
         """
         with self.neo4j_manager.get_session() as session:
             # Check if task exists
@@ -121,6 +144,8 @@ class TaskManager:
                     MATCH (task:Task {name: $name})
                     SET task.embedding = $embedding
                     SET task.description = CASE WHEN $description IS NULL THEN task.description ELSE $description END
+                    SET task.input_params = CASE WHEN $input_params IS NULL THEN task.input_params ELSE $input_params END
+                    SET task.output_params = CASE WHEN $output_params IS NULL THEN task.output_params ELSE $output_params END
                     
                     WITH task
                     OPTIONAL MATCH (task)-[r:USES]->(:Tool)
@@ -131,29 +156,40 @@ class TaskManager:
                     MATCH (tool:Tool {name: tool_name})
                     CREATE (task)-[:USES {order: index(tool_name)}]->(tool)
                     
-                    RETURN task, collect(tool.name) as tools
+                    WITH task
+                    MATCH (task)-[r:USES]->(tool:Tool)
+                    WITH task, tool ORDER BY r.order
+                    WITH task, collect(tool) as tools
+                    RETURN task, tools
                     LIMIT 1
                     """,
                     name=name,
                     description=description,
                     tool_names=tool_names,
-                    embedding=embedding
+                    embedding=embedding,
+                    input_params=input_params,
+                    output_params=output_params
                 )
             else:
                 result = session.run("""
                     MATCH (task:Task {name: $name})
                     SET task.embedding = $embedding
                     SET task.description = CASE WHEN $description IS NULL THEN task.description ELSE $description END
+                    SET task.input_params = CASE WHEN $input_params IS NULL THEN task.input_params ELSE $input_params END
+                    SET task.output_params = CASE WHEN $output_params IS NULL THEN task.output_params ELSE $output_params END
                     
                     WITH task
-                    MATCH (task)-[:USES]->(tool:Tool)
-                    
-                    RETURN task, collect(tool.name) as tools
+                    MATCH (task)-[r:USES]->(tool:Tool)
+                    WITH task, tool ORDER BY r.order
+                    WITH task, collect(tool) as tools
+                    RETURN task, tools
                     LIMIT 1
                     """,
                     name=name,
                     description=description,
-                    embedding=embedding
+                    embedding=embedding,
+                    input_params=input_params,
+                    output_params=output_params
                 )
             
             record = result.single()
@@ -171,27 +207,40 @@ class TaskManager:
             context_variables: Context variables
             
         Returns:
-            Dict[str, Any]: Execution results and context variables
+            Dict[str, Any]: Task execution results containing:
+                - results: All tool execution results
+                - outputs: Specified output parameters
+                - context_variables: Updated context variables
         """
         if context_variables is None:
             context_variables = {}
             
         with self.neo4j_manager.get_session() as session:
-            # Get task tools in order
+            # Get task and its tools in order
             result = session.run("""
                 MATCH (task:Task {name: $task_name})-[r:USES]->(tool:Tool)
-                RETURN task, tool
-                ORDER BY r.order
+                WITH task, tool ORDER BY r.order
+                WITH task, collect(tool) as tools
+                RETURN task, tools
+                LIMIT 1
                 """,
                 task_name=task_name
-            )
+            ).single()
             
-            tools = []
-            for record in result:
-                tools.append(record["tool"])
+            if not result:
+                raise ValueError(f"Task '{task_name}' not found")
+                
+            task = result["task"]
+            tools = result["tools"]
             
             if not tools:
-                raise ValueError(f"Task '{task_name}' not found or has no tools")
+                raise ValueError(f"Task '{task_name}' has no associated tools")
+            
+            # Validate required input parameters
+            input_params = task.get("input_params", [])
+            missing_inputs = [param for param in input_params if param not in context_variables]
+            if missing_inputs:
+                raise ValueError(f"Missing required task input parameters: {', '.join(missing_inputs)}")
             
             # Execute tools in order
             results = {}
@@ -204,8 +253,23 @@ class TaskManager:
                     # Get tool function
                     tool_function = getattr(module, tool["name"])
                     
-                    # Execute tool function with context variables
-                    result = tool_function(**context_variables)
+                    # Get function parameters
+                    sig = inspect.signature(tool_function)
+                    tool_params = {}
+                    
+                    # Check for required parameters and build tool_params
+                    missing_params = []
+                    for param_name, param in sig.parameters.items():
+                        if param_name in context_variables:
+                            tool_params[param_name] = context_variables[param_name]
+                        elif param.default == param.empty:  # Parameter is required
+                            missing_params.append(param_name)
+                    
+                    if missing_params:
+                        raise ValueError(f"Missing required parameters for tool '{tool['name']}': {', '.join(missing_params)}")
+                    
+                    # Execute tool function with matched parameters
+                    result = tool_function(**tool_params)
                     results[tool["name"]] = result
                     
                     # Update context variables if result is a dictionary
@@ -217,10 +281,21 @@ class TaskManager:
                 except AttributeError:
                     raise AttributeError(f"Tool function '{tool['name']}' not found in module '{module_path}'")
                 except Exception as e:
-                    raise Exception(f"Error executing tool '{tool['name']}': {str(e)}")
+                    raise RuntimeError(f"Error executing tool '{tool['name']}': {str(e)}")
+            
+            # Extract specified output parameters
+            output_params = task.get("output_params", [])
+            missing_outputs = [param for param in output_params if param not in context_variables]
+            if missing_outputs:
+                raise ValueError(f"Required output parameters not found in results: {', '.join(missing_outputs)}")
+                
+            outputs = {param: context_variables[param] 
+                      for param in output_params 
+                      if param in context_variables}
             
             return {
                 "results": results,
+                "outputs": outputs,
                 "context_variables": context_variables
             }
 
@@ -229,7 +304,9 @@ class TaskManager:
         with self.neo4j_manager.get_session() as session:
             result = session.run("""
                 MATCH (task:Task {name: $task_name})-[r:USES]->(tool:Tool)
-                RETURN task, collect(tool.name) as tools
+                WITH task, tool ORDER BY r.order
+                WITH task, collect(tool) as tools
+                RETURN task, tools
                 LIMIT 1
                 """,
                 task_name=task_name
@@ -242,12 +319,43 @@ class TaskManager:
             task["tools"] = result["tools"]
             return task
 
+    def get_task_parameters(self, task_name: str) -> Dict[str, List[str]]:
+        """Get task's defined input and output parameters
+        
+        Args:
+            task_name: Task name
+            
+        Returns:
+            Dict containing:
+                - input_params: List of required input parameter names
+                - output_params: List of output parameter names
+        """
+        with self.neo4j_manager.get_session() as session:
+            result = session.run("""
+                MATCH (task:Task {name: $task_name})
+                RETURN task
+                LIMIT 1
+                """,
+                task_name=task_name
+            ).single()
+            
+            if not result:
+                raise ValueError(f"Task '{task_name}' not found")
+                
+            task = result["task"]
+            return {
+                "input_params": task.get("input_params", []),
+                "output_params": task.get("output_params", [])
+            }
+
     def list_tasks(self) -> list:
         """List all tasks"""
         with self.neo4j_manager.get_session() as session:
             result = session.run("""
-                MATCH (task:Task)-[:USES]->(tool:Tool)
-                RETURN task, collect(tool.name) as tools
+                MATCH (task:Task)-[r:USES]->(tool:Tool)
+                WITH task, tool ORDER BY r.order
+                WITH task, collect(tool) as tools
+                RETURN task, tools
                 ORDER BY task.name
                 """)
             

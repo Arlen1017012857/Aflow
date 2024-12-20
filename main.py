@@ -37,6 +37,6 @@ if __name__ == "__main__":
     # tools = aflow_manager.list_tools()
     # print("\nFound tools:", tools)
 
-    # search_query = "我想计算两数之和"
-    # search_results = aflow_manager.search_tools(search_query)
-    # print("\nSearch results:", search_results)
+    search_query = "文件管理"
+    search_results = aflow_manager.search_tools(search_query)
+    print("\nSearch results:", search_results)
