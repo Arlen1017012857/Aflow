@@ -274,6 +274,11 @@ class ToolManager:
                 return
         
         # 处理文件中的函数节点
+        if not current_node.children:
+            print(f"No functions found in file: {file_path}")
+            return
+
+        print(f"Found {len(current_node.children)} nodes in {file_path}")
         for func_name, func_node in current_node.children.items():
             if not func_node.is_function:
                 continue
@@ -284,8 +289,14 @@ class ToolManager:
                 
             # 从函数节点获取信息
             tool_name = func_node.function_name
+            if not tool_name:  # 确保函数名不为空
+                print(f"Skipping node with empty function name in {file_path}")
+                continue
+                
             description = func_node.function_doc or ""
             category = os.path.splitext(rel_path)[0].replace(os.sep, '.')
+            
+            print(f"Processing function: {tool_name} in category {category}")
             
             # 检查工具是否存在
             with self.neo4j_manager.get_session() as session:

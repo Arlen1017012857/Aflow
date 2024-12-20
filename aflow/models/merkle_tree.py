@@ -89,10 +89,12 @@ class MerkleTree:
                 if isinstance(node, ast.FunctionDef):
                     if node.name.startswith('_'):
                         continue
-                        
+                    
+                    print(f"Found function: {node.name}")
                     # 获取函数源代码
                     func_source = ast.get_source_segment(content, node)
                     if not func_source:
+                        print(f"Could not get source for function: {node.name}")
                         continue
 
                     # 计算函数哈希值
@@ -138,6 +140,7 @@ class MerkleTree:
             # 对Python文件，提取函数并作为子节点
             function_nodes = self._extract_functions(path)
             for func_node in function_nodes:
+                print(f"Adding function node: {func_node.function_name}")
                 children[func_node.function_name] = func_node
             # 文件节点的哈希值包含所有函数节点的哈希
             child_hashes = sorted(child.hash for child in children.values())
@@ -410,3 +413,103 @@ class MerkleTree:
         for i, (child_name, child_node) in enumerate(children):
             is_last_child = i == len(children) - 1
             self.visualize(child_node, next_indent, is_last_child)
+
+    def visualize_diff(self, indent: str = "", node1: Optional[MerkleNode] = None, 
+                      node2: Optional[MerkleNode] = None, path: str = "") -> None:
+        """可视化显示两个Merkle树的差异
+        
+        Args:
+            indent: 当前缩进
+            node1: 第一个树的节点（当前树）
+            node2: 第二个树的节点（之前的树）
+            path: 当前路径
+        """
+        if node1 is None and node2 is None:
+            print("\nMerkle Tree Diff:")
+            node1 = self.root
+            node2 = self.previous_root
+            if node2 is None:
+                print("No previous state to compare with.")
+                self.visualize()
+                return
+        
+        # 获取当前节点名称
+        name = os.path.basename(path) if path else os.path.basename(node1.path if node1 else node2.path)
+        
+        # 确定节点状态
+        if node1 and node2:
+            if node1.hash != node2.hash:
+                status = "[M]"  # Modified
+                color = "\033[33m"  # Yellow
+            else:
+                status = "   "  # Unchanged
+                color = "\033[0m"  # Reset
+        elif node1:
+            status = "[+]"  # Added
+            color = "\033[32m"  # Green
+        else:  # node2
+            status = "[-]"  # Removed
+            color = "\033[31m"  # Red
+        
+        # 显示节点信息
+        if node1 and node1.is_function or node2 and node2.is_function:
+            func_name = node1.function_name if node1 else node2.function_name
+            print(f"{indent}{color}{status} 🔧 {name} ({func_name})\033[0m")
+        elif node1 and node1.is_file or node2 and node2.is_file:
+            print(f"{indent}{color}{status} 📄 {name}\033[0m")
+        else:
+            print(f"{indent}{color}{status} 📁 {name}\033[0m")
+        
+        # 获取所有子节点的名称
+        children1 = set(node1.children.keys()) if node1 else set()
+        children2 = set(node2.children.keys()) if node2 else set()
+        all_children = sorted(children1 | children2)
+        
+        # 递归显示子节点
+        next_indent = indent + "    "
+        for child_name in all_children:
+            child1 = node1.children.get(child_name) if node1 else None
+            child2 = node2.children.get(child_name) if node2 else None
+            child_path = os.path.join(path, child_name) if path else child_name
+            self.visualize_diff(next_indent, child1, child2, child_path)
+
+    def get_changes(self) -> Dict[str, Set[str]]:
+        """获取当前树与之前状态的变化
+        
+        Returns:
+            Dict[str, Set[str]]: 包含added、modified和removed的文件路径集合
+        """
+        changes = {
+            'added': set(),
+            'modified': set(),
+            'removed': set()
+        }
+        
+        def compare_nodes(node1: Optional[MerkleNode], node2: Optional[MerkleNode], 
+                         path: str = "") -> None:
+            if not node1 and not node2:
+                return
+                
+            current_path = os.path.join(path, os.path.basename(
+                node1.path if node1 else node2.path))
+            
+            if node1 and node2:
+                if node1.hash != node2.hash:
+                    changes['modified'].add(current_path)
+            elif node1:
+                changes['added'].add(current_path)
+            else:  # node2
+                changes['removed'].add(current_path)
+            
+            # 递归处理子节点
+            children1 = node1.children if node1 else {}
+            children2 = node2.children if node2 else {}
+            all_children = set(children1.keys()) | set(children2.keys())
+            
+            for child_name in all_children:
+                child1 = children1.get(child_name)
+                child2 = children2.get(child_name)
+                compare_nodes(child1, child2, current_path)
+        
+        compare_nodes(self.root, self.previous_root)
+        return changes

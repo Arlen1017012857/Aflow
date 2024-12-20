@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+import sys
+import codecs
+sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
+
 from re import search
 from aflow import AflowManager
 import os
@@ -7,11 +12,6 @@ import ast
 if __name__ == "__main__":
     # Set tools directory before initializing
     os.environ['TOOLS_DIR'] = 'tests/test_tools'
-    
-    # Clear any existing Merkle tree state
-    merkle_state_dir = '.merkle'
-    if os.path.exists(merkle_state_dir):
-        shutil.rmtree(merkle_state_dir)
     
     aflow_manager = AflowManager()
     # sync_tools_result = aflow_manager.sync_tools()
@@ -42,6 +42,25 @@ if __name__ == "__main__":
     # print("\nSearch results:", search_results)
 
     # 展示工具目录的Merkle树结构
-    print("\n=== Tools Directory Merkle Tree ===")
+    print("\n=== Current Merkle Tree ===")
     tools_merkle_tree = aflow_manager.tool_manager.merkle_tree
     tools_merkle_tree.visualize()
+
+    # 添加一个测试文件来演示差异
+    test_file_content = '''def test_function():
+    """This is a test function"""
+    return "Hello, World!"
+'''
+    os.makedirs(os.path.dirname('tests/test_tools/test_add_dir/test_add.py'), exist_ok=True)
+    with open('tests/test_tools/test_add_dir/test_add.py', 'w') as f:
+        f.write(test_file_content)
+
+    # 更新Merkle树并显示差异
+    print("\n=== Merkle Tree Changes ===")
+    tools_merkle_tree.update()
+    tools_merkle_tree.visualize_diff()
+
+    # 清理测试文件
+    os.remove('tests/test_tools/test_add_dir/test_add.py')
+    if len(os.listdir('tests/test_tools/test_add_dir')) == 0:
+        os.rmdir('tests/test_tools/test_add_dir')
