@@ -379,3 +379,34 @@ class MerkleTree:
         self.root_dir = state['root_dir']
         self.root = dict_to_node(state['root']) if state['root'] else None
         self.previous_root = dict_to_node(state['previous_root']) if state['previous_root'] else None
+
+    def visualize(self, node: Optional[MerkleNode] = None, indent: str = "", is_last: bool = True) -> None:
+        """在终端中可视化显示Merkle树结构
+        
+        Args:
+            node: 要显示的节点，默认为根节点
+            indent: 当前缩进
+            is_last: 是否是父节点的最后一个子节点
+        """
+        if node is None:
+            node = self.root
+            print("\nMerkle Tree Structure:")
+        
+        # 显示当前节点
+        connector = "└── " if is_last else "├── "
+        name = os.path.basename(node.path)
+        if node.is_function:
+            print(f"{indent}{connector}🔧 {name} ({node.function_name})")
+        elif node.is_file:
+            print(f"{indent}{connector}📄 {name}")
+        else:
+            print(f"{indent}{connector}📁 {name}")
+        
+        # 计算下一级缩进
+        next_indent = indent + ("    " if is_last else "│   ")
+        
+        # 显示子节点
+        children = list(node.children.items())
+        for i, (child_name, child_node) in enumerate(children):
+            is_last_child = i == len(children) - 1
+            self.visualize(child_node, next_indent, is_last_child)

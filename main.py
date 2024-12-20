@@ -37,6 +37,11 @@ if __name__ == "__main__":
     # tools = aflow_manager.list_tools()
     # print("\nFound tools:", tools)
 
-    search_query = "文件管理"
-    search_results = aflow_manager.search_tools(search_query)
-    print("\nSearch results:", search_results)
+    # search_query = "文件管理"
+    # search_results = aflow_manager.search_tools(search_query)
+    # print("\nSearch results:", search_results)
+
+    # 展示工具目录的Merkle树结构
+    print("\n=== Tools Directory Merkle Tree ===")
+    tools_merkle_tree = aflow_manager.tool_manager.merkle_tree
+    tools_merkle_tree.visualize()
