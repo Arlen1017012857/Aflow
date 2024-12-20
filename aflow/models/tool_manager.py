@@ -40,7 +40,8 @@ class ToolManager:
         """
         print(f"Creating tool: {name} ({category})")
         # Create category directory if it doesn't exist
-        category_dir = os.path.join(self.tools_dir, category)
+        category_name, tool_file = category.split('.')
+        category_dir = os.path.join(self.tools_dir, category_name)
         os.makedirs(category_dir, exist_ok=True)
         
         with self.neo4j_manager.get_session() as session:
