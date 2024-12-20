@@ -216,6 +216,9 @@ class MerkleTree:
         if not node2:  # 新增
             if node1.is_file:
                 added.add(node1.path)
+                # 如果是新增的Python文件，处理其中的函数
+                if node1.path.endswith('.py'):
+                    self._compare_function_nodes(node1, None, modified)
             elif node1.is_function:
                 # 新增函数时，将其父文件标记为修改
                 parent_path = node1.path.split('::')[0]
@@ -252,16 +255,26 @@ class MerkleTree:
                 child2 = node2.children.get(child_name)
                 self._compare_nodes(child1, child2, added, modified, removed)
     
-    def _compare_function_nodes(self, file_node1: MerkleNode, file_node2: MerkleNode, modified: Set[str]):
+    def _compare_function_nodes(self, file_node1: MerkleNode, file_node2: Optional[MerkleNode], modified: Set[str]):
         """比较两个文件节点中的函数节点
         
         Args:
             file_node1: 当前文件节点
-            file_node2: 上一个文件节点
+            file_node2: 上一个文件节点（可能为None，表示新文件）
             modified: 修改文件的集合
         """
-        # 获取两个文件中的所有函数名
+        # 获取当前文件中的所有函数
         funcs1 = {name: node for name, node in file_node1.children.items() if node.is_function}
+        
+        # 如果是新文件，所有函数都是新增的
+        if file_node2 is None:
+            for func_name, func_node in funcs1.items():
+                print(f"New function added in new file: {func_name}")
+                self.changed_functions[file_node1.path] = set(funcs1.keys())
+                modified.add(file_node1.path)
+            return
+            
+        # 获取旧文件中的所有函数
         funcs2 = {name: node for name, node in file_node2.children.items() if node.is_function}
         
         # 检查函数变化

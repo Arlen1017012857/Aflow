@@ -197,7 +197,7 @@ class ToolManager:
         
         # 获取发生变化的函数信息
         changed_functions = getattr(self.merkle_tree, 'changed_functions', {})
-        
+        print(f"Changed functions: {changed_functions}")
         # Process changed files
         for file_path in changes['added'] | changes['modified']:
             print(f"Processing file: {file_path}")
@@ -265,41 +265,43 @@ class ToolManager:
             file_path: Path to the tool file
             changed_functions: Set of function names that have changed
         """
-        # 获取文件对应的MerkleNode
+        # Get file's relative path for category
         rel_path = os.path.relpath(file_path, self.tools_dir)
+        category = os.path.splitext(rel_path)[0].replace(os.sep, '.')
+
+        # Parse file and extract tool info
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                tree = ast.parse(content)
+                tools_info = self._extract_tool_info(file_path, tree)
+        except Exception as e:
+            print(f"Error parsing {file_path}: {e}")
+            return
+
+        # Get current functions from Merkle tree
         current_node = self.merkle_tree.root
         for part in rel_path.split(os.sep):
             current_node = current_node.children.get(part)
             if not current_node:
                 print(f"File not found in Merkle tree: {file_path}")
                 return
-        
-        # 处理文件中的函数节点
-        if not current_node.children:
-            print(f"No functions found in file: {file_path}")
-            return
 
-        print(f"Found {len(current_node.children)} nodes in {file_path}")
-        for func_name, func_node in current_node.children.items():
-            if not func_node.is_function:
-                continue
-                
-            # 如果提供了changed_functions，则只处理发生变化的函数
+        print(f"\nProcessing file: {file_path}")
+        print(f"Found {len(tools_info)} functions")
+        
+        # Process each function
+        for func_name, info in tools_info.items():
+            print(f"Processing function: {func_name}")
+            # Skip if we're only processing changed functions
             if changed_functions is not None and func_name not in changed_functions:
+                print(f"Function not changed: {func_name}")
                 continue
-                
-            # 从函数节点获取信息
-            tool_name = func_node.function_name
-            if not tool_name:  # 确保函数名不为空
-                print(f"Skipping node with empty function name in {file_path}")
-                continue
-                
-            description = func_node.function_doc or ""
-            category = os.path.splitext(rel_path)[0].replace(os.sep, '.')
             
-            print(f"Processing function: {tool_name} in category {category}")
+            tool_name = info['name']
+            description = info['docstring']
             
-            # 检查工具是否存在
+            # Check if tool exists
             with self.neo4j_manager.get_session() as session:
                 exists = session.run("""
                     MATCH (tool:Tool {name: $name})
@@ -308,21 +310,47 @@ class ToolManager:
                     name=tool_name
                 ).single()["exists"]
             
-            # 创建或更新工具
-            if exists:
-                print(f"Updating tool: {tool_name}")
-                self.update_tool(
-                    name=tool_name,
-                    description=description,
-                    category=category
-                )
-            else:
-                print(f"Creating tool: {tool_name}")
-                self.create_tool(
-                    name=tool_name,
-                    description=description,
-                    category=category
-                )
+            try:
+                if exists:
+                    print(f"Updating tool: {tool_name}")
+                    self.update_tool(
+                        name=tool_name,
+                        description=description,
+                        category=category
+                    )
+                else:
+                    print(f"Creating new tool: {tool_name} in category {category}")
+                    self.create_tool(
+                        name=tool_name,
+                        description=description,
+                        category=category
+                    )
+            except Exception as e:
+                print(f"Error processing tool {tool_name}: {e}")
+
+    def _extract_tool_info(self, file_path: str, tree: ast.AST) -> dict:
+        """Extract tool information from AST
+        
+        Args:
+            file_path: Path to the tool file
+            tree: AST of the file
+        
+        Returns:
+            Dict mapping function names to their info (name, docstring)
+        """
+        tools_info = {}
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                # Get docstring if it exists
+                docstring = ast.get_docstring(node) or ""
+                
+                tools_info[node.name] = {
+                    'name': node.name,
+                    'docstring': docstring
+                }
+                
+        return tools_info
 
     def _remove_tool_file(self, file_path: str):
         """Remove tools from database when their file is deleted

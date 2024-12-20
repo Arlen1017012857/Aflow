@@ -41,6 +41,9 @@ if __name__ == "__main__":
     # search_results = aflow_manager.search_tools(search_query)
     # print("\nSearch results:", search_results)
 
+
+   
+
     # 展示工具目录的Merkle树结构
     print("\n=== Current Merkle Tree ===")
     tools_merkle_tree = aflow_manager.tool_manager.merkle_tree
@@ -51,8 +54,9 @@ if __name__ == "__main__":
     """This is a test function"""
     return "Hello, World!"
 '''
-    os.makedirs(os.path.dirname('tests/test_tools/test_add_dir/test_add.py'), exist_ok=True)
-    with open('tests/test_tools/test_add_dir/test_add.py', 'w') as f:
+    test_file_path = 'tests/test_tools/test_add_dir/test_add.py'
+    os.makedirs(os.path.dirname(test_file_path), exist_ok=True)
+    with open(test_file_path, 'w') as f:
         f.write(test_file_content)
 
     # 更新Merkle树并显示差异
@@ -60,7 +64,22 @@ if __name__ == "__main__":
     tools_merkle_tree.update()
     tools_merkle_tree.visualize_diff()
 
-    # 清理测试文件
-    os.remove('tests/test_tools/test_add_dir/test_add.py')
-    if len(os.listdir('tests/test_tools/test_add_dir')) == 0:
-        os.rmdir('tests/test_tools/test_add_dir')
+
+    # sync_tools_result = aflow_manager.sync_tools()
+    # print("Sync tools result:", sync_tools_result)
+    # 等待文件处理完成并清理
+    import time
+    time.sleep(1)  # 给系统一些时间完成文件处理
+    
+    try:
+        # 清理测试文件
+        if os.path.exists(test_file_path):
+            os.remove(test_file_path)
+            print(f"\nSuccessfully removed test file: {test_file_path}")
+        test_dir = os.path.dirname(test_file_path)
+        if os.path.exists(test_dir) and len(os.listdir(test_dir)) == 0:
+            os.rmdir(test_dir)
+            print(f"Removed empty directory: {test_dir}")
+    except Exception as e:
+        print(f"\nWarning: Could not clean up test files: {e}")
+        print("You may need to manually delete the test files later.")
