@@ -4,6 +4,8 @@ import os
 import ast
 import time
 import json
+import importlib
+import sys
 
 class ToolManager:
     def __init__(self, neo4j_manager, retriever_manager, tools_dir: str):
@@ -139,6 +141,62 @@ class ToolManager:
             """, name=name)
             record = result.single()
             return record["tool"] if record else None
+
+    def get_tool_function(self, tool_name: str):
+        """Get tool function by name
+        
+        Args:
+            tool_name: Name of the tool function
+            
+        Returns:
+            Function object
+        """
+        # Get tool info from database
+        with self.neo4j_manager.get_session() as session:
+            result = session.run("""
+                MATCH (tool:Tool {name: $name})
+                RETURN tool
+                """,
+                name=tool_name
+            ).single()
+            
+            if not result:
+                raise ValueError(f"Tool '{tool_name}' not found in database")
+                
+            tool = result['tool']
+            category = tool['category']
+            
+            # Split category to get directory and file names
+            category_name, module_name = category.split('.')
+            
+            # Construct module path
+            module_path = os.path.join(self.tools_dir, category_name, f"{module_name}.py")
+            module_path = os.path.normpath(module_path)
+            
+            if not os.path.exists(module_path):
+                raise ImportError(f"Tool module not found at {module_path}")
+                
+            # Import module
+            module_name = f"{category_name}.{module_name}"
+            if module_name in sys.modules:
+                module = sys.modules[module_name]
+            else:
+                spec = importlib.util.spec_from_file_location(module_name, module_path)
+                if not spec:
+                    raise ImportError(f"Failed to create module spec for {module_path}")
+                    
+                module = importlib.util.module_from_spec(spec)
+                if not module:
+                    raise ImportError(f"Failed to create module from spec for {module_path}")
+                    
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+            
+            # Get and return function
+            if not hasattr(module, tool_name):
+                raise AttributeError(f"Tool function '{tool_name}' not found in module {module_path}")
+                
+            return getattr(module, tool_name)
 
     def _load_merkle_state(self):
         with self.neo4j_manager.get_session() as session:

@@ -1,11 +1,15 @@
 from typing import Dict, List, Any, Union
 import importlib
 import inspect
+import os
+import sys
+import importlib.util
 
 class TaskManager:
-    def __init__(self, neo4j_manager, retriever_manager):
+    def __init__(self, neo4j_manager, retriever_manager, tool_manager):
         self.neo4j_manager = neo4j_manager
         self.retriever_manager = retriever_manager
+        self.tool_manager = tool_manager
 
     def create_task(self, name: str, description: str, tool_names: List[str], 
                    input_params: List[str] = None, output_params: List[str] = None) -> Dict:
@@ -26,19 +30,15 @@ class TaskManager:
         with self.neo4j_manager.get_session() as session:
             # Check if task exists
             existing_task = session.run("""
-                MATCH (task:Task {name: $name})-[:USES]->(tool:Tool)
-                WITH task, tool ORDER BY tool.order
-                WITH task, collect(tool) as tools
-                RETURN task, tools
+                MATCH (task:Task {name: $name})
+                RETURN task
                 LIMIT 1
                 """,
                 name=name
             ).single()
             
             if existing_task:
-                task = existing_task["task"]
-                task["tools"] = existing_task["tools"]
-                return task
+                return self._filter_node_info(existing_task["task"])
             
             # Check if all tools exist
             missing_tools = []
@@ -69,16 +69,11 @@ class TaskManager:
                     output_params: $output_params
                 })
                 WITH task
-                UNWIND $tool_names as tool_name
+                UNWIND range(0, size($tool_names)-1) as idx
+                WITH task, $tool_names[idx] as tool_name, idx
                 MATCH (tool:Tool {name: tool_name})
-                CREATE (task)-[:USES {order: index(tool_name)}]->(tool)
-                
-                WITH task
-                MATCH (task)-[r:USES]->(tool:Tool)
-                WITH task, tool ORDER BY r.order
-                WITH task, collect(tool) as tools
-                RETURN task, tools
-                LIMIT 1
+                MERGE (task)-[:USES {order: idx}]->(tool)
+                RETURN task
                 """,
                 name=name,
                 description=description,
@@ -89,11 +84,7 @@ class TaskManager:
             )
             
             record = result.single()
-            if record:
-                task = record["task"]
-                task["tools"] = record["tools"]
-                return task
-            return None
+            return self._filter_node_info(record["task"]) if record else None
 
     def update_task(self, name: str, description: str = None, tool_names: List[str] = None,
                    input_params: List[str] = None, output_params: List[str] = None) -> Dict:
@@ -116,9 +107,9 @@ class TaskManager:
             ).single()["exists"]
             
             if not exists:
-                raise ValueError(f"Task '{name}' does not exist. Use create_task to create new tasks.")
+                raise ValueError(f"Task {name} does not exist")
             
-            # If new tools specified, check if they all exist
+            # Check if all tools exist if tool_names provided
             if tool_names:
                 missing_tools = []
                 for tool_name in tool_names:
@@ -135,69 +126,55 @@ class TaskManager:
                 if missing_tools:
                     raise ValueError(f"The following tools do not exist: {', '.join(missing_tools)}")
             
-            # Create new embedding vector
-            embedding = self.retriever_manager.embedder.embed_query(f"{name} {description if description else ''}")
+            # Update task properties
+            update_query = """
+                MATCH (task:Task {name: $name})
+            """
             
-            # Update task properties and tool associations
+            if description or tool_names or input_params is not None or output_params is not None:
+                update_query += "SET "
+                updates = []
+                
+                if description:
+                    updates.append("task.description = $description")
+                    # Update embedding if description changes
+                    embedding = self.retriever_manager.embedder.embed_query(f"{name} {description}")
+                    updates.append("task.embedding = $embedding")
+                
+                if input_params is not None:
+                    updates.append("task.input_params = $input_params")
+                
+                if output_params is not None:
+                    updates.append("task.output_params = $output_params")
+                
+                update_query += ", ".join(updates)
+            
             if tool_names:
-                result = session.run("""
-                    MATCH (task:Task {name: $name})
-                    SET task.embedding = $embedding
-                    SET task.description = CASE WHEN $description IS NULL THEN task.description ELSE $description END
-                    SET task.input_params = CASE WHEN $input_params IS NULL THEN task.input_params ELSE $input_params END
-                    SET task.output_params = CASE WHEN $output_params IS NULL THEN task.output_params ELSE $output_params END
-                    
-                    WITH task
-                    OPTIONAL MATCH (task)-[r:USES]->(:Tool)
-                    DELETE r
-                    
-                    WITH task
-                    UNWIND $tool_names as tool_name
-                    MATCH (tool:Tool {name: tool_name})
-                    CREATE (task)-[:USES {order: index(tool_name)}]->(tool)
-                    
-                    WITH task
-                    MATCH (task)-[r:USES]->(tool:Tool)
-                    WITH task, tool ORDER BY r.order
-                    WITH task, collect(tool) as tools
-                    RETURN task, tools
-                    LIMIT 1
-                    """,
-                    name=name,
-                    description=description,
-                    tool_names=tool_names,
-                    embedding=embedding,
-                    input_params=input_params,
-                    output_params=output_params
-                )
-            else:
-                result = session.run("""
-                    MATCH (task:Task {name: $name})
-                    SET task.embedding = $embedding
-                    SET task.description = CASE WHEN $description IS NULL THEN task.description ELSE $description END
-                    SET task.input_params = CASE WHEN $input_params IS NULL THEN task.input_params ELSE $input_params END
-                    SET task.output_params = CASE WHEN $output_params IS NULL THEN task.output_params ELSE $output_params END
-                    
-                    WITH task
-                    MATCH (task)-[r:USES]->(tool:Tool)
-                    WITH task, tool ORDER BY r.order
-                    WITH task, collect(tool) as tools
-                    RETURN task, tools
-                    LIMIT 1
-                    """,
-                    name=name,
-                    description=description,
-                    embedding=embedding,
-                    input_params=input_params,
-                    output_params=output_params
-                )
+                update_query += """
+                WITH task
+                MATCH (task)-[r:USES]->(:Tool)
+                DELETE r
+                WITH task
+                UNWIND range(0, size($tool_names)-1) as idx
+                WITH task, $tool_names[idx] as tool_name, idx
+                MATCH (tool:Tool {name: tool_name})
+                MERGE (task)-[:USES {order: idx}]->(tool)
+                """
+            
+            update_query += " RETURN task"
+            
+            result = session.run(
+                update_query,
+                name=name,
+                description=description,
+                tool_names=tool_names,
+                input_params=input_params,
+                output_params=output_params,
+                embedding=embedding if description else None
+            )
             
             record = result.single()
-            if record:
-                task = record["task"]
-                task["tools"] = record["tools"]
-                return task
-            return None
+            return self._filter_node_info(record["task"]) if record else None
 
     def execute_task(self, task_name: str, context_variables: Dict[str, Any] = None) -> Dict[str, Any]:
         """Execute task by running all associated tools in order
@@ -244,14 +221,16 @@ class TaskManager:
             
             # Execute tools in order
             results = {}
+            context_variables = context_variables or {}
+            
             for tool in tools:
                 try:
-                    # Import tool module dynamically
-                    module_path = f"aflow.tools.{tool['category']}.{tool['name']}"
-                    module = importlib.import_module(module_path)
+                    # Get tool category and name
+                    category = tool['category']
+                    tool_name = tool['name']
                     
-                    # Get tool function
-                    tool_function = getattr(module, tool["name"])
+                    # Get tool function from tool manager
+                    tool_function = self.tool_manager.get_tool_function(tool_name)
                     
                     # Get function parameters
                     sig = inspect.signature(tool_function)
@@ -266,22 +245,47 @@ class TaskManager:
                             missing_params.append(param_name)
                     
                     if missing_params:
-                        raise ValueError(f"Missing required parameters for tool '{tool['name']}': {', '.join(missing_params)}")
+                        raise ValueError(f"Missing required parameters for tool '{tool_name}': {', '.join(missing_params)}")
                     
                     # Execute tool function with matched parameters
+                    print(f"Executing {category}: {tool_name} with params: {tool_params}")  # Debug output
                     result = tool_function(**tool_params)
-                    results[tool["name"]] = result
+                    results[tool_name] = result
                     
-                    # Update context variables if result is a dictionary
+                    # Update context variables for next tool
                     if isinstance(result, dict):
                         context_variables.update(result)
+                    else:
+                        # If result is not a dict, store it with the tool name as key
+                        context_variables[tool_name] = result
                         
-                except ImportError:
-                    raise ImportError(f"Tool module '{module_path}' not found")
-                except AttributeError:
-                    raise AttributeError(f"Tool function '{tool['name']}' not found in module '{module_path}'")
+                        # Get the return annotation from the function if available
+                        return_annotation = inspect.signature(tool_function).return_annotation
+                        if return_annotation != inspect.Signature.empty:
+                            # If the return annotation is a string, use it as the variable name
+                            if isinstance(return_annotation, str):
+                                context_variables[return_annotation] = result
+                        
+                        # If no return annotation, try to infer from docstring
+                        docstring = inspect.getdoc(tool_function)
+                        if docstring:
+                            # Look for "Returns:" section in docstring
+                            lines = docstring.split('\n')
+                            for i, line in enumerate(lines):
+                                if 'Returns:' in line and i + 1 < len(lines):
+                                    # Next line might contain the return variable name
+                                    return_desc = lines[i + 1].strip()
+                                    # Try to extract variable name from description
+                                    if ':' in return_desc:
+                                        var_name = return_desc.split(':')[0].strip()
+                                        context_variables[var_name] = result
+                                    break
+                        
+                    print(f"Updated context: {context_variables}")  # Debug output
+                        
                 except Exception as e:
-                    raise RuntimeError(f"Error executing tool '{tool['name']}': {str(e)}")
+                    print(f"Error executing {tool_name}: {str(e)}")  # Debug output
+                    raise RuntimeError(f"Error executing tool '{tool_name}': {str(e)}")
             
             # Extract specified output parameters
             output_params = task.get("output_params", [])
@@ -317,7 +321,7 @@ class TaskManager:
                 
             task = result["task"]
             task["tools"] = result["tools"]
-            return task
+            return self._filter_node_info(task)
 
     def get_task_parameters(self, task_name: str) -> Dict[str, List[str]]:
         """Get task's defined input and output parameters
@@ -363,7 +367,7 @@ class TaskManager:
             for record in result:
                 task = record["task"]
                 task["tools"] = record["tools"]
-                tasks.append(task)
+                tasks.append(self._filter_node_info(task))
             return tasks
 
     def delete_task(self, task_name: str):
@@ -387,3 +391,11 @@ class TaskManager:
                 """,
                 task_name=task_name
             )
+
+    def _filter_node_info(self, node_info):
+        """Filter out embedding from node info for display purposes"""
+        if not node_info:
+            return None
+        if isinstance(node_info, list):
+            return [{k: v for k, v in node.items() if k != 'embedding'} for node in node_info]
+        return {k: v for k, v in node_info.items() if k != 'embedding'}

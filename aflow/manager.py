@@ -30,7 +30,7 @@ class AflowManager:
         
         # Initialize model managers
         self.tool_manager = ToolManager(self.neo4j_manager, self.retriever_manager, config['tools_dir'])
-        self.task_manager = TaskManager(self.neo4j_manager, self.retriever_manager)
+        self.task_manager = TaskManager(self.neo4j_manager, self.retriever_manager, self.tool_manager)
         self.workflow_manager = WorkflowManager(self.neo4j_manager, self.retriever_manager, self.task_manager)
 
     def create_tool(self, name: str, description: str, category: str = 'uncategorized') -> Dict:
@@ -58,13 +58,17 @@ class AflowManager:
         return self.tool_manager.sync_tools()
 
 
-    def create_task(self, name: str, description: str, tool_name: str) -> Dict:
+    def create_task(self, name: str, description: str, tool_names: List[str], input_params: List[str], output_params: List[str]) -> Dict:
         """Create a new task and associate with tool"""
-        return self.task_manager.create_task(name, description, tool_name)
+        return self.task_manager.create_task(name, description, tool_names, input_params, output_params)
 
-    def update_task(self, name: str, description: str = None, tool_name: str = None) -> Dict:
+    def update_task(self, name: str, description: str = None, tool_names: List[str] = None, input_params: List[str] = None, output_params: List[str] = None) -> Dict:
         """Update existing task properties and tool association"""
-        return self.task_manager.update_task(name, description, tool_name)
+        return self.task_manager.update_task(name, description, tool_names, input_params, output_params)
+
+    def execute_task(self, task_name: str, context_variables: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Execute task with given parameters"""
+        return self.task_manager.execute_task(task_name, context_variables)
 
     def get_task(self, task_name: str) -> Dict:
         """Get task details"""
